@@ -15,17 +15,7 @@ from tqdm import tqdm
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 cudnn.benchmark = True
 
-# === 阈值搜索工具函数 ===
-def find_best_threshold(probs, y_true):
-    thresholds = np.arange(0.001, 1.0, 0.001)
-    mccs = []
-    for t in thresholds:
-        preds = (probs >= t).astype(int)
-        mccs.append(matthews_corrcoef(y_true, preds))
-    best_idx = np.nanargmax(mccs)
-    return thresholds[best_idx], mccs[best_idx]
-
-# === Dataset 全部載入版本 ===
+# === Dataset 全部载入版本 ===
 class EEGDataset(Dataset):
     def __init__(self, x_all, y_all, indices):
         self.x_all   = x_all
@@ -42,7 +32,7 @@ class EEGDataset(Dataset):
             torch.tensor(self.y_all[i], dtype=torch.float32),
         )
 
-# === 簡單線性模型 ===
+# === 简单线性模型 ===
 class LRModel(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
@@ -54,7 +44,7 @@ class LRModel(nn.Module):
     def forward(self, x):
         return self.linear(x)
 
-# === 指標計算 ===
+# === 指标计算 ===
 def compute_metrics(cm, label):
     tn, fp, fn, tp = cm.ravel()
     sens = tp / (tp + fn) if tp + fn > 0 else 0
@@ -75,12 +65,12 @@ def show_class_distribution(name, indices, y):
     unique, counts = np.unique(y[indices], return_counts=True)
     print(f"{name} class distribution: {dict(zip(unique, counts))}")
 
-# === 訓練無 validation，加入折內阈值搜索與 subject-level ===
+# === 训练（无 validation），固定阈值 0.5 ===
 def train_fold_no_valid(x_all, y_all, subject_ids,
                         train_idx, test_idx,
                         batch_size=64, lr=1e-3, wd=1e-3, max_epochs=25):
 
-    # --- 模型与优化器 ---
+    # 模型 & 优化器
     input_dim = x_all.shape[1]
     model = LRModel(input_dim).to(device)
     opt   = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
@@ -88,7 +78,7 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
         opt, mode='min', factor=0.5, patience=3, min_lr=1e-7
     )
 
-    # --- DataLoader ---
+    # DataLoader
     train_loader      = DataLoader(EEGDataset(x_all, y_all, train_idx),
                                    batch_size=batch_size, shuffle=True)
     train_eval_loader = DataLoader(EEGDataset(x_all, y_all, train_idx),
@@ -96,14 +86,14 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
     test_loader       = DataLoader(EEGDataset(x_all, y_all, test_idx),
                                    batch_size=batch_size, shuffle=False)
 
-    # --- 损失函数（带类别不平衡权重） ---
+    # 损失（考虑类别不平衡）
     pos_weight = torch.tensor(
         [(y_all[train_idx]==0).sum() / (y_all[train_idx]==1).sum()],
         dtype=torch.float32
     ).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    # --- 训练 Loop ---
+    # 训练 Loop
     train_losses = []
     model.train()
     for epoch in range(max_epochs):
@@ -126,18 +116,11 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
         scheduler.step(avg_loss)
         print(f"Epoch {epoch+1} ─ lr = {opt.param_groups[0]['lr']:.6g}")
 
-    # --- 折内阈值搜索（Train set） ---
-    model.eval()
-    probs_train = []
-    with torch.no_grad():
-        for xb, _ in train_eval_loader:
-            probs_train.append(torch.sigmoid(model(xb.to(device))).cpu().numpy().flatten())
-    probs_train = np.concatenate(probs_train)
-    best_t, best_mcc = find_best_threshold(probs_train, y_all[train_idx])
-    print(f"Fold 阈值搜索结果：best_t={best_t:.3f}, train_MCC={best_mcc:.4f}")
+    # 固定阈值
+    best_t = 0.5
 
-    # --- Sample-Level 评估函数 ---
-    def evaluate_with_t(loader, indices):
+    # Sample-Level 评估
+    def evaluate_with_fixed_t(loader, indices):
         probs = []
         with torch.no_grad():
             for xb, _ in loader:
@@ -146,7 +129,7 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
         preds = (probs >= best_t).astype(int)
         return confusion_matrix(y_all[indices], preds)
 
-    # --- Subject-Level 评估函数 ---
+    # Subject-Level 评估
     def evaluate_subject(loader, indices):
         probs = []
         with torch.no_grad():
@@ -161,9 +144,8 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
             y_sub_pred.append(int((probs[mask].mean() >= best_t)))
         return confusion_matrix(y_sub_true, y_sub_pred)
 
-    # --- 最终混淆矩阵 ---
-    cm_tr     = evaluate_with_t(train_eval_loader, train_idx)
-    cm_te     = evaluate_with_t(test_loader,       test_idx)
+    cm_tr     = evaluate_with_fixed_t(train_eval_loader, train_idx)
+    cm_te     = evaluate_with_fixed_t(test_loader,       test_idx)
     cm_sub_tr = evaluate_subject(train_eval_loader, train_idx)
     cm_sub_te = evaluate_subject(test_loader,       test_idx)
 
@@ -171,7 +153,7 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
 
 # === 主流程 ===
 if __name__ == "__main__":
-    # 加载特征 & 标签
+    # 加载数据
     x_train = np.load(r"D:\chen_mr_feature\SKNA_features_beat_sym_0.5_150hz_l1.44s\train_scaled.npy")
     x_test  = np.load(r"D:\chen_mr_feature\SKNA_features_beat_sym_0.5_150hz_l1.44s\test_scaled.npy")
     x_all   = np.concatenate([x_train, x_test], axis=0)
@@ -228,12 +210,10 @@ if __name__ == "__main__":
     # 平均训练损失曲线
     min_len = min(len(l) for l in all_train_losses)
     avg_loss = [sum(f[i] for f in all_train_losses)/5 for i in range(min_len)]
-    plt.plot(avg_loss)
-    plt.title("Avg Train Loss (5 folds)")
-    plt.xlabel("Epoch"); plt.grid(True); plt.tight_layout()
-    plt.show()
+    plt.plot(avg_loss); plt.title("Avg Train Loss (5 folds)")
+    plt.xlabel("Epoch"); plt.grid(True); plt.tight_layout(); plt.show()
 
-    # 最终汇总
+    # 汇总结果
     print("\n=== 🎯 Final Results ===")
     compute_metrics(final_cms['s_tr'],   "Total Train Sample-Level")
     compute_metrics(final_cms['s_te'],   "Total Test Sample-Level")
