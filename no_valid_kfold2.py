@@ -74,8 +74,10 @@ def train_fold_no_valid(x_all, y_all, subject_ids,
     train_eval_loader = DataLoader(EEGDataset(x_all, y_all, train_idx), batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(EEGDataset(x_all, y_all, test_idx), batch_size=batch_size, shuffle=False)
 
-    pos_weight = torch.tensor([(y_all[train_idx]==0).sum() / (y_all[train_idx]==1).sum()], dtype=torch.float32).to(device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # Cellery: Do not use weighted loss
+    # pos_weight = torch.tensor([(y_all[train_idx]==0).sum() / (y_all[train_idx]==1).sum()], dtype=torch.float32).to(device)
+    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = nn.BCEWithLogitsLoss()
 
     train_losses = []
     model.train()
